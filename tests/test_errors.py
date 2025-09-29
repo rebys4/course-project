@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import _DB, _SEQ, app
 
+
 client = TestClient(app)
 
 
