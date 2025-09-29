@@ -41,13 +41,29 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    def _sanitize(errors):
+        out = []
+        for e in errors:
+            e = dict(e)
+            ctx = e.get("ctx")
+            if (
+                isinstance(ctx, dict)
+                and "error" in ctx
+                and isinstance(ctx["error"], Exception)
+            ):
+                ctx = dict(ctx)
+                ctx["error"] = str(ctx["error"])
+                e["ctx"] = ctx
+            out.append(e)
+        return out
+
     return JSONResponse(
         status_code=422,
         content={
             "error": {
                 "code": "validation_error",
                 "message": "invalid_request",
-                "details": exc.errors(),
+                "details": _sanitize(exc.errors()),
             }
         },
     )
@@ -80,7 +96,7 @@ def get_current_user_id(x_user: Optional[str]) -> int:
 
 
 # -----------------------------
-# Data from db (demo)
+# Демо-данные с бд
 # -----------------------------
 
 _DB = {
@@ -251,14 +267,3 @@ def delete_topic(
     _DB["topics"].remove(t)
     # 204 No Content
     return JSONResponse(status_code=204, content=None)
-
-
-# Импорт список тем в csv
-@app.post("/topics/import")
-def import_topics_csv(x_user: Optional[str] = Header(default=None, alias="X-User")):
-    """
-    Placeholder for CSV import (e.g., via multipart file upload).
-    In this iteration we return a clear 'not_implemented' error per requirements list.
-    """
-    get_current_user_id(x_user)
-    raise ApiError(code="not_implemented", message="CSV import stub", status=501)
