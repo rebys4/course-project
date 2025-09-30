@@ -1,9 +1,8 @@
 from datetime import date, timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 
-from app.main import _DB, _SEQ, app
+from app.main import app
 
 client = TestClient(app)
 
@@ -20,15 +19,6 @@ def test_validation_error():
     assert r.status_code == 422
     body = r.json()
     assert body["error"]["code"] == "validation_error"
-
-
-# Очистка локального бд сделано для теста
-@pytest.fixture(autouse=True)
-def clean_state():
-    _DB["items"].clear()
-    _DB["topics"].clear()
-    _SEQ["topic_id"] = 0
-    yield
 
 
 def auth_headers(uid: int = 42):
