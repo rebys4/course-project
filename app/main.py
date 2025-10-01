@@ -1,10 +1,10 @@
-from datetime import date
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+
+from app.schemas import TopicCreate, TopicOut, TopicStatus, TopicUpdate
 
 app = FastAPI(title="SecDev Course App", version="0.2.0")
 
@@ -124,47 +124,6 @@ def _require_owned(topic_id: int, owner_id: int) -> dict:
             code="forbidden", message="topic not owned by current user", status=403
         )
     return t
-
-
-# -----------------------------
-# Модели
-# -----------------------------
-
-TopicStatus = Literal["todo", "in_progress", "done"]
-
-
-class TopicCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
-    due_at: date
-    status: TopicStatus = "todo"
-
-    @field_validator("due_at")
-    @classmethod
-    def due_at_not_in_past(cls, v: date) -> date:
-        if v < date.today():
-            raise ValueError("due_at must be today or in the future")
-        return v
-
-
-class TopicUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, max_length=200)
-    due_at: Optional[date] = None
-    status: Optional[TopicStatus] = None
-
-    @field_validator("due_at")
-    @classmethod
-    def due_at_not_in_past(cls, v: Optional[date]) -> Optional[date]:
-        if v is not None and v < date.today():
-            raise ValueError("due_at must be today or in the future")
-        return v
-
-
-class TopicOut(BaseModel):
-    id: int
-    owner_id: int
-    title: str
-    due_at: date
-    status: TopicStatus
 
 
 # -----------------------------
