@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -7,6 +8,58 @@ from fastapi.responses import JSONResponse
 from app.schemas import TopicCreate, TopicOut, TopicStatus, TopicUpdate
 
 app = FastAPI(title="SecDev Course App", version="0.2.0")
+
+
+def _is_probably_csv(sample: bytes) -> bool:
+    if not sample:
+        return False
+    try:
+        text = sample.decode("utf-8", errors="ignore")
+    except Exception:
+        return False
+    if any(sep in text for sep in [",", ";", "\t"]):
+        return True
+    return False
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    rid = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    request.state.request_id = rid
+
+    try:
+        response = await call_next(request)
+    except ApiError as exc:
+        response = _problem_response(
+            status=exc.status,
+            code=exc.code,
+            message=exc.message,
+            request=request,
+            details=exc.details,
+        )
+
+    response.headers["X-Request-Id"] = rid
+    return response
+
+
+def _problem_response(
+    status: int,
+    code: str,
+    message: str,
+    request: Request,
+    details=None,
+) -> JSONResponse:
+    rid = getattr(request.state, "request_id", None)
+    body = {
+        "type": f"https://httpstatuses.com/{status}",
+        "title": code,
+        "status": status,
+        "detail": message,
+        "instance": str(request.url),
+        "correlation_id": rid,
+        "error": {"code": code, "message": message, "details": details or []},
+    }
+    return JSONResponse(status_code=status, content=body)
 
 
 class ApiError(Exception):
@@ -21,21 +74,23 @@ class ApiError(Exception):
 
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, exc: ApiError):
-    return JSONResponse(
-        status_code=exc.status,
-        content={
-            "error": {"code": exc.code, "message": exc.message, "details": exc.details}
-        },
+    return _problem_response(
+        status=exc.status,
+        code=exc.code,
+        message=exc.message,
+        request=request,
+        details=exc.details,
     )
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    # Normalize FastAPI HTTPException into our error envelope
     detail = exc.detail if isinstance(exc.detail, str) else "http_error"
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": {"code": "http_error", "message": detail}},
+    return _problem_response(
+        status=exc.status_code,
+        code="http_error",
+        message=detail,
+        request=request,
     )
 
 
@@ -57,15 +112,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             out.append(e)
         return out
 
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error": {
-                "code": "validation_error",
-                "message": "invalid_request",
-                "details": _sanitize(exc.errors()),
-            }
-        },
+    return _problem_response(
+        status=422,
+        code="validation_error",
+        message="invalid_request",
+        request=request,
+        details=_sanitize(exc.errors()),
     )
 
 
@@ -224,5 +276,4 @@ def delete_topic(
     user_id = get_current_user_id(x_user)
     t = _require_owned(topic_id, user_id)
     _DB["topics"].remove(t)
-    # 204 No Content
     return JSONResponse(status_code=204, content=None)
