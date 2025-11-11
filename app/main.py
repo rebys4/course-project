@@ -1,13 +1,18 @@
+import os
 import uuid
 from typing import List, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import JSONResponse
 
 from app.schemas import TopicCreate, TopicOut, TopicStatus, TopicUpdate
 
 app = FastAPI(title="SecDev Course App", version="0.2.0")
+
+CSV_MAX_BYTES = int(os.getenv("CSV_MAX_BYTES", "1048576"))
+QUARANTINE_DIR = os.getenv("QUARANTINE_DIR", "/tmp/studyplanner_quarantine")
+os.makedirs(QUARANTINE_DIR, exist_ok=True)
 
 
 def _is_probably_csv(sample: bytes) -> bool:
@@ -277,3 +282,63 @@ def delete_topic(
     t = _require_owned(topic_id, user_id)
     _DB["topics"].remove(t)
     return JSONResponse(status_code=204, content=None)
+
+
+@app.post("/topics/import", status_code=202)
+async def import_topics_csv(
+    file: UploadFile = File(...),
+    x_user: Optional[str] = Header(default=None, alias="X-User"),
+):
+    get_current_user_id(x_user)
+
+    raw = await file.read()
+    size = len(raw)
+    if size == 0:
+        raise ApiError(code="empty_file", message="uploaded file is empty", status=400)
+
+    if size > CSV_MAX_BYTES:
+        raise ApiError(
+            code="file_too_large",
+            message=f"uploaded file exceeds limit {CSV_MAX_BYTES} bytes",
+            status=413,
+        )
+
+    if not _is_probably_csv(raw[:1024]):
+        raise ApiError(
+            code="invalid_csv",
+            message="file does not look like CSV",
+            status=400,
+        )
+
+    safe_name = f"{uuid.uuid4().hex}.csv"
+    dest_path = os.path.join(QUARANTINE_DIR, safe_name)
+
+    dir_real = os.path.realpath(QUARANTINE_DIR)
+    file_real = os.path.realpath(os.path.dirname(dest_path))
+    if dir_real != file_real:
+        raise ApiError(
+            code="invalid_path",
+            message="quarantine path resolution mismatch",
+            status=500,
+        )
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    fd = os.open(dest_path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    return {
+        "status": "accepted",
+        "quarantine": True,
+        "size": size,
+        "stored_filename": safe_name,
+    }
