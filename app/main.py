@@ -1,12 +1,21 @@
 from typing import List, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
+from app.models import Item as ItemModel
+from app.models import Topic as TopicModel
 from app.schemas import TopicCreate, TopicOut, TopicStatus, TopicUpdate
+from database.db import SessionLocal, init_db
 
-app = FastAPI(title="SecDev Course App", version="0.2.0")
+app = FastAPI(title="SecDev Course App", version="0.3.0")
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
 
 
 class ApiError(Exception):
@@ -31,7 +40,6 @@ async def api_error_handler(request: Request, exc: ApiError):
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    # Normalize FastAPI HTTPException into our error envelope
     detail = exc.detail if isinstance(exc.detail, str) else "http_error"
     return JSONResponse(
         status_code=exc.status_code,
@@ -96,30 +104,33 @@ def get_current_user_id(x_user: Optional[str]) -> int:
 
 
 # -----------------------------
-# Демо-данные с бд
+# Подключение к БД (SQLAlchemy)
 # -----------------------------
 
-_DB = {
-    "items": [],
-    "topics": [],
-}
-_SEQ = {"topic_id": 0}
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-def _next_topic_id() -> int:
-    _SEQ["topic_id"] += 1
-    return _SEQ["topic_id"]
+def _topic_to_out(t: TopicModel) -> TopicOut:
+    return TopicOut(
+        id=t.id,
+        owner_id=t.owner_id,
+        title=t.title,
+        due_at=t.due_at,
+        status=t.status,  # type: ignore[arg-type]
+    )
 
 
-def _find_topic(topic_id: int) -> Optional[dict]:
-    return next((t for t in _DB["topics"] if t["id"] == topic_id), None)
-
-
-def _require_owned(topic_id: int, owner_id: int) -> dict:
-    t = _find_topic(topic_id)
+def _require_owned(db: Session, topic_id: int, owner_id: int) -> TopicModel:
+    t = db.query(TopicModel).filter(TopicModel.id == topic_id).first()
     if not t:
         raise ApiError(code="not_found", message="topic not found", status=404)
-    if t["owner_id"] != owner_id:
+    if t.owner_id != owner_id:
         raise ApiError(
             code="forbidden", message="topic not owned by current user", status=403
         )
@@ -127,102 +138,113 @@ def _require_owned(topic_id: int, owner_id: int) -> dict:
 
 
 # -----------------------------
-#  Endpoints
+#  Endpoints /items (через БД)
 # -----------------------------
 
 
 @app.post("/items")
-def create_item(name: str):
+def create_item(name: str, db: Session = Depends(get_db)):
     if not name or len(name) > 100:
         raise ApiError(
             code="validation_error", message="name must be 1..100 chars", status=422
         )
-    item = {"id": len(_DB["items"]) + 1, "name": name}
-    _DB["items"].append(item)
-    return item
+
+    item = ItemModel(name=name)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "name": item.name}
 
 
 @app.get("/items/{item_id}")
-def get_item(item_id: int):
-    for it in _DB["items"]:
-        if it["id"] == item_id:
-            return it
-    raise ApiError(code="not_found", message="item not found", status=404)
+def get_item(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(ItemModel).filter(ItemModel.id == item_id).first()
+    if not item:
+        raise ApiError(code="not_found", message="item not found", status=404)
+    return {"id": item.id, "name": item.name}
 
 
 # -----------------------------
-# Topic endpoints
+# Topic endpoints (через БД)
 # -----------------------------
 
 
-# Создать тему
 @app.post("/topics", response_model=TopicOut, status_code=201)
 def create_topic(
-    payload: TopicCreate, x_user: Optional[str] = Header(default=None, alias="X-User")
+    payload: TopicCreate,
+    x_user: Optional[str] = Header(default=None, alias="X-User"),
+    db: Session = Depends(get_db),
 ):
     user_id = get_current_user_id(x_user)
 
-    topic = {
-        "id": _next_topic_id(),
-        "owner_id": user_id,
-        "title": payload.title.strip(),
-        "due_at": payload.due_at,
-        "status": payload.status,
-    }
-    _DB["topics"].append(topic)
-    return TopicOut(**topic)
+    topic = TopicModel(
+        owner_id=user_id,
+        title=payload.title.strip(),
+        due_at=payload.due_at,
+        status=payload.status,
+    )
+    db.add(topic)
+    db.commit()
+    db.refresh(topic)
+    return _topic_to_out(topic)
 
 
-# Получить список тем (+ фильтрация по статусу)
 @app.get("/topics", response_model=List[TopicOut])
 def list_topics(
     status: Optional[TopicStatus] = None,
     x_user: Optional[str] = Header(default=None, alias="X-User"),
+    db: Session = Depends(get_db),
 ):
     user_id = get_current_user_id(x_user)
-    rows = [t for t in _DB["topics"] if t["owner_id"] == user_id]
-    if status:
-        rows = [t for t in rows if t["status"] == status]
-    return [TopicOut(**t) for t in rows]
+    q = db.query(TopicModel).filter(TopicModel.owner_id == user_id)
+    if status is not None:
+        q = q.filter(TopicModel.status == status)
+    rows = q.all()
+    return [_topic_to_out(t) for t in rows]
 
 
-# Получить тему по id (owner-only)
 @app.get("/topics/{topic_id}", response_model=TopicOut)
 def get_topic(
-    topic_id: int, x_user: Optional[str] = Header(default=None, alias="X-User")
+    topic_id: int,
+    x_user: Optional[str] = Header(default=None, alias="X-User"),
+    db: Session = Depends(get_db),
 ):
     user_id = get_current_user_id(x_user)
-    t = _require_owned(topic_id, user_id)
-    return TopicOut(**t)
+    t = _require_owned(db, topic_id, user_id)
+    return _topic_to_out(t)
 
 
-# Изменить тему
 @app.patch("/topics/{topic_id}", response_model=TopicOut)
 def update_topic(
     topic_id: int,
     payload: TopicUpdate,
     x_user: Optional[str] = Header(default=None, alias="X-User"),
+    db: Session = Depends(get_db),
 ):
     user_id = get_current_user_id(x_user)
-    t = _require_owned(topic_id, user_id)
+    t = _require_owned(db, topic_id, user_id)
 
     if payload.title is not None:
-        t["title"] = payload.title.strip()
+        t.title = payload.title.strip()
     if payload.due_at is not None:
-        t["due_at"] = payload.due_at
+        t.due_at = payload.due_at
     if payload.status is not None:
-        t["status"] = payload.status
+        t.status = payload.status
 
-    return TopicOut(**t)
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return _topic_to_out(t)
 
 
-# Удалить тему по id
 @app.delete("/topics/{topic_id}", status_code=204)
 def delete_topic(
-    topic_id: int, x_user: Optional[str] = Header(default=None, alias="X-User")
+    topic_id: int,
+    x_user: Optional[str] = Header(default=None, alias="X-User"),
+    db: Session = Depends(get_db),
 ):
     user_id = get_current_user_id(x_user)
-    t = _require_owned(topic_id, user_id)
-    _DB["topics"].remove(t)
-    # 204 No Content
+    t = _require_owned(db, topic_id, user_id)
+    db.delete(t)
+    db.commit()
     return JSONResponse(status_code=204, content=None)
