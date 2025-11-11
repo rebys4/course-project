@@ -1,8 +1,32 @@
 services:
-  app:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - PYTHONUNBUFFERED=1
-    profiles: ["dev"]
+    db:
+        image: postgres:16
+        container_name: studyplanner_db
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: ${DB_NAME}
+            POSTGRES_USER: ${DB_USER}
+            POSTGRES_PASSWORD: ${DB_PASS}
+        ports:
+            - "5432:5432"
+        volumes:
+            - pgdata:/var/lib/postgresql/data
+
+    app:
+        build: .
+        container_name: studyplanner_app
+        restart: unless-stopped
+        depends_on:
+            - db
+        ports:
+            - "8000:8000"
+        environment:
+            PYTHONUNBUFFERED: 1
+            DB_HOST: ${DB_HOST}
+            DB_PORT: ${DB_PORT}
+            DB_NAME: ${DB_NAME}
+            DB_USER: ${DB_USER}
+            DB_PASS: ${DB_PASS}
+
+volumes:
+    pgdata:
