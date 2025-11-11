@@ -8,11 +8,14 @@ from sqlalchemy.orm import Session
 from app.models import Item as ItemModel
 from app.models import Topic as TopicModel
 from app.schemas import TopicCreate, TopicOut, TopicStatus, TopicUpdate
-from database.db import Base, SessionLocal, engine
+from database.db import SessionLocal, init_db
 
 app = FastAPI(title="SecDev Course App", version="0.3.0")
 
-Base.metadata.create_all(bind=engine)
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
 
 
 class ApiError(Exception):
