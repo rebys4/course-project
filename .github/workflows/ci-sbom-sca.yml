@@ -1,0 +1,69 @@
+name: Security - SBOM & SCA
+
+on:
+    workflow_dispatch:
+    push:
+        paths:
+            - "**/*.py"
+            - "requirements*.txt"
+            - "Dockerfile"
+            - ".github/workflows/ci-sbom-sca.yml"
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    sbom_sca:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Ensure evidence dirs
+              run: mkdir -p EVIDENCE/P09
+
+            - name: Generate SBOM (Syft CycloneDX)
+              run: |
+                  docker run --rm -v "$PWD":/work -w /work \
+                    anchore/syft:latest \
+                    packages dir:. -o cyclonedx-json > EVIDENCE/P09/sbom.json
+
+            - name: SCA Scan (Grype)
+              run: |
+                  set -e
+                  docker run --rm -v "$PWD":/work -w /work \
+                    anchore/grype:latest \
+                    sbom:/work/EVIDENCE/P09/sbom.json -o json > EVIDENCE/P09/sca_report.json
+
+                  echo "# SCA summary" > EVIDENCE/P09/sca_summary.md
+                  echo "" >> EVIDENCE/P09/sca_summary.md
+                  echo "## Severity counts" >> EVIDENCE/P09/sca_summary.md
+                  jq '[.matches[].vulnerability.severity]
+                      | group_by(.)
+                      | map({ (.[0]): length })
+                      | add' EVIDENCE/P09/sca_report.json \
+                    >> EVIDENCE/P09/sca_summary.md || true
+
+                  echo "" >> EVIDENCE/P09/sca_summary.md
+                  echo "## Top 10 vulnerabilities" >> EVIDENCE/P09/sca_summary.md
+                  jq -c '.matches[0:10] |
+                         map({
+                           id: .vulnerability.id,
+                           severity: .vulnerability.severity,
+                           pkg: .artifact.name,
+                           version: .artifact.version
+                         })' EVIDENCE/P09/sca_report.json \
+                    >> EVIDENCE/P09/sca_summary.md || true
+
+            - name: Upload SBOM/SCA evidence
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: P09_EVIDENCE
+                  path: EVIDENCE/P09
