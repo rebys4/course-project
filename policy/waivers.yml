@@ -1,0 +1,11 @@
+waivers:
+  - id: "CVE-2024-2025"
+    package: "example-lib"
+    version: "1.2.3"
+    severity: "High"
+    reason: >
+      Транзитивная зависимость; эксплойт невозможен в контексте текущего
+      сервиса; планируется обновление после выхода совместимой версии.
+    issue: "https://github.com/rebys4/course-project/issues/3"
+    expires_at: "2025-12-31"
+    approved_by: "tutor@example.org"
