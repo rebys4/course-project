@@ -1,0 +1,18 @@
+title = "Gitleaks config for studyplanner"
+description = "Base configuration with default rules and simple allowlist for non-sensitive patterns."
+
+[extend]
+# Использовать встроенный набор правил Gitleaks
+useDefault = true
+
+[allowlist]
+description = "Allowlist for obvious non-secrets used in tests/examples."
+paths = [
+  "EVIDENCE/",   # отчёты и артефакты
+]
+commits = []
+regexes = [
+  '''example\.com''',
+  '''localhost(:[0-9]+)?''',
+  '''dummy_(token|secret|password)'''
+]

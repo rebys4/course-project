@@ -1,0 +1,32 @@
+rules:
+    # Запрет голого except: (частый анти-паттерн)
+    - id: app-python-no-bare-except
+      languages: [python]
+      message: "Avoid bare 'except:' — it hides real errors. Catch specific exceptions."
+      severity: MEDIUM
+      patterns:
+          - pattern: |
+                try:
+                    ...
+                except:
+                    ...
+
+    # Запрет debug=True в прод-коде (FastAPI/Uvicorn)
+    - id: app-fastapi-no-debug-true
+      languages: [python]
+      message: "Do not run FastAPI/Uvicorn with debug=True in production."
+      severity: HIGH
+      pattern-either:
+          - pattern: uvicorn.run(..., debug=True, ...)
+          - pattern: app.run(..., debug=True, ...)
+
+    # Примитивная проверка на прямое логирование/печать чувствительных данных
+    - id: app-no-print-secrets
+      languages: [python]
+      message: "Avoid printing secrets / tokens directly. Use structured logging with masking."
+      severity: MEDIUM
+      patterns:
+          - pattern: print($X)
+          - metavariable-regex:
+                metavariable: $X
+                regex: "(token|secret|password|passwd|api_key|apikey)"
