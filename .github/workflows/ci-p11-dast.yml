@@ -57,14 +57,15 @@ jobs:
         run: |
           docker run --rm --network host \
             -u "$(id -u):$(id -g)" \
-            -v "$PWD:/zap/wrk" \
+            -e HOME=/zap/wrk \
+            -v "$PWD:/zap/wrk" -w /zap/wrk \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
-              -t http://127.0.0.1:8000/health \
-              -m 5 \
-              -r EVIDENCE/P11/zap_baseline.html \
-              -J EVIDENCE/P11/zap_baseline.json \
-              -I
+                -t http://127.0.0.1:8000/health \
+                -m 5 \
+                -r EVIDENCE/P11/zap_baseline.html \
+                -J EVIDENCE/P11/zap_baseline.json \
+                -I
 
       - name: Stop app
         if: always()
