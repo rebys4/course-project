@@ -1,0 +1,9 @@
+quiet: false
+compact: true
+framework:
+  - kubernetes
+  - terraform
+  - dockerfile
+skip-check:
+  # Список check_id, которые вы сознательно пропускаете
+  # - CKV_K8S_9999
