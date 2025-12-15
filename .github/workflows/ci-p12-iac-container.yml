@@ -1,0 +1,121 @@
+name: P12 - IaC & Container Security (Hadolint, Checkov, Trivy)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Dockerfile"
+      - "docker/**"
+      - "docker-compose.yml"
+      - ".github/workflows/ci-p12-iac-container.yml"
+      - "security/**"
+      - "**/*.tf"
+      - "**/*.yml"
+      - "**/*.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  iac_container_security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure evidence dirs
+        run: mkdir -p EVIDENCE/P12
+
+      # ---------------------------
+      # Hadolint (Dockerfile lint)
+      # ---------------------------
+      - name: Hadolint (JSON report)
+        run: |
+          DOCKERFILE_PATH="Dockerfile"
+          if [ -f "docker/Dockerfile" ]; then DOCKERFILE_PATH="docker/Dockerfile"; fi
+
+          docker run --rm -i \
+            -v "$PWD:/work" -w /work \
+            hadolint/hadolint:latest \
+            hadolint -f json -c security/hadolint.yaml "$DOCKERFILE_PATH" \
+            > EVIDENCE/P12/hadolint_report.json || true
+
+      # ---------------------------
+      # Checkov (IaC scan)
+      # Сканиует: docker-compose.yml, k8s yaml, terraform, etc.
+      # ---------------------------
+      - name: Checkov (JSON report)
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            bridgecrew/checkov:latest \
+            --directory /work \
+            --config-file security/checkov.yaml \
+            --output json \
+            > EVIDENCE/P12/checkov_report.json || true
+
+      # ---------------------------
+      # Build image for Trivy scan
+      # ---------------------------
+      - name: Build image (for Trivy)
+        run: |
+          IMAGE_TAG="studyplanner-app:p12"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          docker build -t "$IMAGE_TAG" .
+
+      # ---------------------------
+      # Trivy (image scan) -> JSON
+      # ---------------------------
+      - name: Trivy scan image (JSON report)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_TAG }}
+          format: json
+          output: EVIDENCE/P12/trivy_report.json
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: "0"
+
+      # ---------------------------
+      # Optional: short summary
+      # ---------------------------
+      - name: hardening summary
+        if: always()
+        run: |
+          {
+            echo "# P12 summary"
+            echo ""
+            echo "## Hadolint"
+            if command -v jq >/dev/null 2>&1; then
+              echo "- Findings: $(jq 'length' EVIDENCE/P12/hadolint_report.json 2>/dev/null || echo 0)"
+            else
+              echo "- Findings: (jq not available)"
+            fi
+            echo ""
+            echo "## Trivy"
+            if command -v jq >/dev/null 2>&1; then
+              echo "- Total results: $(jq '.Results | length' EVIDENCE/P12/trivy_report.json 2>/dev/null || echo 0)"
+              echo "- High/Critical: $(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length' EVIDENCE/P12/trivy_report.json 2>/dev/null || echo 0)"
+            fi
+            echo ""
+            echo "## Checkov"
+            if command -v jq >/dev/null 2>&1; then
+              echo "- Failed checks: $(jq '.summary.failed' EVIDENCE/P12/checkov_report.json 2>/dev/null || echo 0)"
+              echo "- Passed checks: $(jq '.summary.passed' EVIDENCE/P12/checkov_report.json 2>/dev/null || echo 0)"
+              echo "- Skipped checks: $(jq '.summary.skipped' EVIDENCE/P12/checkov_report.json 2>/dev/null || echo 0)"
+            fi
+          } > EVIDENCE/P12/hardening_summary.md
+
+      - name: Upload P12 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: P12_EVIDENCE
+          path: EVIDENCE/P12
