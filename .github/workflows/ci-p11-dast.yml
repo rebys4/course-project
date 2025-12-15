@@ -43,7 +43,6 @@ jobs:
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          # стартуем приложение в фоне
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
           echo $! > uvicorn.pid
 
@@ -62,9 +61,6 @@ jobs:
 
       - name: Run OWASP ZAP Baseline
         run: |
-          # ZAP baseline: сканируем локальный URL
-          # -I: не падать по алертам (job будет зелёным, отчёт — для триажа)
-          # -m: макс. время (мин)
           docker run --rm --network host \
             -v "$PWD:/zap/wrk" \
             ghcr.io/zaproxy/zaproxy:stable \
