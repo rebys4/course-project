@@ -1,12 +1,10 @@
-name: Security - DAST (ZAP Baseline)
+name: P11 - DAST (ZAP baseline)
 
 on:
   workflow_dispatch:
   push:
     paths:
       - "**/*.py"
-      - "app/**"
-      - "requirements*.txt"
       - ".github/workflows/ci-p11-dast.yml"
 
 permissions:
@@ -17,16 +15,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dast_zap:
+  dast:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Ensure evidence dirs
-        run: mkdir -p EVIDENCE/P11
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -34,38 +28,39 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Start app (uvicorn)
-        env:
-          PYTHONUNBUFFERED: "1"
+      - name: Start app (background)
         run: |
-          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 &
           echo $! > uvicorn.pid
 
-      - name: Wait for health
+      - name: Wait for app readiness
         run: |
-          for i in {1..60}; do
+          for i in {1..30}; do
             if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
               echo "App is up"
               exit 0
             fi
             sleep 1
           done
-          echo "App failed to start, printing logs:"
-          tail -n 200 uvicorn.log || true
+          echo "App did not start in time"
           exit 1
 
-      - name: Run OWASP ZAP Baseline
+      - name: Ensure evidence dirs
+        run: mkdir -p EVIDENCE/P11
+
+      - name: ZAP baseline scan
         run: |
           docker run --rm --network host \
+            -u "$(id -u):$(id -g)" \
             -v "$PWD:/zap/wrk" \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
-              -t http://127.0.0.1:8000/ \
+              -t http://127.0.0.1:8000/health \
               -m 5 \
               -r EVIDENCE/P11/zap_baseline.html \
               -J EVIDENCE/P11/zap_baseline.json \
@@ -74,12 +69,9 @@ jobs:
       - name: Stop app
         if: always()
         run: |
-          if [ -f uvicorn.pid ]; then
-            kill "$(cat uvicorn.pid)" || true
-          fi
-          tail -n 200 uvicorn.log || true
+          kill "$(cat uvicorn.pid)" || true
 
-      - name: Upload DAST evidence
+      - name: Upload P11 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
